@@ -86,3 +86,54 @@ pub struct GuardSession {
   breaker : BudgetBreaker
 } derive(Show, Eq)
 
+///| Construct a new FieldRule.
+pub fn new_field_rule(
+  name : String,
+  required : Bool,
+  kind : FieldKind
+) -> FieldRule {
+  { name, required, kind }
+}
+
+///| Construct a new ToolContract.
+pub fn new_tool_contract(
+  tool_name : String,
+  requires_approval : Bool,
+  rules : Array[FieldRule]
+) -> ToolContract {
+  { tool_name, requires_approval, rules }
+}
+
+///| Construct a string ParamEntry.
+pub fn str_param(key : String, text : String) -> ParamEntry {
+  { key, value: Str(text) }
+}
+
+///| Construct an integer ParamEntry.
+pub fn int_param(key : String, num : Int) -> ParamEntry {
+  { key, value: IntNum(num) }
+}
+
+///| Construct a new BudgetBreaker with explicit quotas.
+pub fn new_budget_breaker(
+  max_steps : Int,
+  max_consecutive_failures : Int
+) -> BudgetBreaker {
+  let tripped = max_steps <= 0 || max_consecutive_failures <= 0
+  let trip_reason = if max_steps <= 0 {
+    "invalid_max_steps"
+  } else if max_consecutive_failures <= 0 {
+    "invalid_max_consecutive_failures"
+  } else {
+    ""
+  }
+  {
+    max_steps,
+    steps_used: 0,
+    max_consecutive_failures,
+    consecutive_failures: 0,
+    tripped,
+    trip_reason,
+  }
+}
+
