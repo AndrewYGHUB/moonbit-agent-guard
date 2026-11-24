@@ -137,3 +137,63 @@ pub fn new_budget_breaker(
   }
 }
 
+///| Detect path traversal (`..`) or null-byte injection in file paths.
+pub fn has_path_traversal(path : String) -> Bool {
+  let mut prev_dot = false
+  for ch in path {
+    if ch == '\u0000' {
+      return true
+    }
+    if ch == '.' {
+      if prev_dot {
+        return true
+      }
+      prev_dot = true
+    } else {
+      prev_dot = false
+    }
+  }
+  false
+}
+
+///| Detect dangerous shell metacharacters in command arguments.
+pub fn has_shell_metachar(input : String) -> Bool {
+  for ch in input {
+    if ch == ';' ||
+      ch == '|' ||
+      ch == '&' ||
+      ch == '$' ||
+      ch == '`' ||
+      ch == '>' ||
+      ch == '<' ||
+      ch == '\n' ||
+      ch == '\r' ||
+      ch == '\u0000' {
+      return true
+    }
+  }
+  false
+}
+
+fn find_param(params : Array[ParamEntry], key : String) -> ParamVal? {
+  let mut i = 0
+  while i < params.length() {
+    if params[i].key == key {
+      return Some(params[i].value)
+    }
+    i = i + 1
+  }
+  None
+}
+
+fn string_in_list(target : String, allowed : Array[String]) -> Bool {
+  let mut i = 0
+  while i < allowed.length() {
+    if allowed[i] == target {
+      return true
+    }
+    i = i + 1
+  }
+  false
+}
+
