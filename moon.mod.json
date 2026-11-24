@@ -1,0 +1,16 @@
+{
+  "name": "chronovault/agent_guard",
+  "version": "0.1.0",
+  "readme": "README.md",
+  "repository": "https://github.com/chronovault-lab/moonbit-agent-guard",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai-agent",
+    "guardrail",
+    "state-machine",
+    "contract-validation",
+    "circuit-breaker"
+  ],
+  "description": "Zero-dependency deterministic AI Agent tool-call contract validator, human-in-the-loop approval state machine, and budget circuit breaker in MoonBit.",
+  "source": "src"
+}
