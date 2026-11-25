@@ -494,3 +494,147 @@ pub fn gate_approval(session : GuardSession) -> GuardSession {
   }
 }
 
+///| Resolve human-in-the-loop review: WaitingApproval -> Approved | Rejected (or Halted if breaker trips).
+pub fn resolve_approval(
+  session : GuardSession,
+  approved : Bool,
+  reviewer_note : String
+) -> GuardSession {
+  if session.state != WaitingApproval {
+    let log = append_audit(
+      session.audit_log,
+      session.state,
+      Halted,
+      session.tool_name,
+      "illegal_transition_resolve_requires_waiting_approval",
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+  if approved {
+    let log = append_audit(
+      session.audit_log,
+      WaitingApproval,
+      Approved,
+      session.tool_name,
+      "approved:" + reviewer_note,
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Approved,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  } else {
+    let next_breaker = breaker_record_outcome(session.breaker, false)
+    let target = if next_breaker.tripped { Halted } else { Rejected }
+    let log = append_audit(
+      session.audit_log,
+      WaitingApproval,
+      target,
+      session.tool_name,
+      "rejected:" + reviewer_note,
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: target,
+      violations: session.violations,
+      audit_log: log,
+      breaker: next_breaker,
+    }
+  }
+}
+
+///| Finalize execution from Approved -> Completed (or Rejected/Halted on tool error or illegal bypass).
+pub fn finalize_execution(
+  session : GuardSession,
+  tool_succeeded : Bool,
+  summary : String
+) -> GuardSession {
+  if session.state != Approved {
+    let log = append_audit(
+      session.audit_log,
+      session.state,
+      Halted,
+      session.tool_name,
+      "illegal_bypass_execution_requires_approved",
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+  if session.breaker.steps_used >= session.breaker.max_steps {
+    let tripped_breaker : BudgetBreaker = {
+      max_steps: session.breaker.max_steps,
+      steps_used: session.breaker.steps_used,
+      max_consecutive_failures: session.breaker.max_consecutive_failures,
+      consecutive_failures: session.breaker.consecutive_failures,
+      tripped: true,
+      trip_reason: "step_budget_exhausted",
+    }
+    let log = append_audit(
+      session.audit_log,
+      Approved,
+      Halted,
+      session.tool_name,
+      "halted_step_budget_exhausted",
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: tripped_breaker,
+    }
+  }
+  let next_breaker = breaker_record_outcome(session.breaker, tool_succeeded)
+  if tool_succeeded {
+    let log = append_audit(
+      session.audit_log,
+      Approved,
+      Completed,
+      session.tool_name,
+      "completed:" + summary,
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Completed,
+      violations: session.violations,
+      audit_log: log,
+      breaker: next_breaker,
+    }
+  } else {
+    let target = if next_breaker.tripped { Halted } else { Rejected }
+    let log = append_audit(
+      session.audit_log,
+      Approved,
+      target,
+      session.tool_name,
+      "execution_failed:" + summary,
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: target,
+      violations: session.violations,
+      audit_log: log,
+      breaker: next_breaker,
+    }
+  }
+}
