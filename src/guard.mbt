@@ -257,3 +257,240 @@ pub fn validate_call(
   violations
 }
 
+fn append_audit(
+  existing : Array[AuditEvent],
+  from_state : ExecState,
+  to_state : ExecState,
+  tool_name : String,
+  reason : String
+) -> Array[AuditEvent] {
+  let next_log : Array[AuditEvent] = []
+  let mut i = 0
+  while i < existing.length() {
+    next_log.push(existing[i])
+    i = i + 1
+  }
+  next_log.push({
+    seq: existing.length() + 1,
+    from_state,
+    to_state,
+    tool_name,
+    reason,
+  })
+  next_log
+}
+
+///| Record a step outcome in BudgetBreaker and evaluate trip thresholds.
+pub fn breaker_record_outcome(
+  breaker : BudgetBreaker,
+  succeeded : Bool
+) -> BudgetBreaker {
+  if breaker.tripped {
+    return breaker
+  }
+  let next_steps = breaker.steps_used + 1
+  let next_failures = if succeeded {
+    0
+  } else {
+    breaker.consecutive_failures + 1
+  }
+  if next_failures >= breaker.max_consecutive_failures {
+    {
+      max_steps: breaker.max_steps,
+      steps_used: next_steps,
+      max_consecutive_failures: breaker.max_consecutive_failures,
+      consecutive_failures: next_failures,
+      tripped: true,
+      trip_reason: "max_consecutive_failures_reached",
+    }
+  } else if next_steps >= breaker.max_steps {
+    {
+      max_steps: breaker.max_steps,
+      steps_used: next_steps,
+      max_consecutive_failures: breaker.max_consecutive_failures,
+      consecutive_failures: next_failures,
+      tripped: true,
+      trip_reason: "step_budget_exhausted",
+    }
+  } else {
+    {
+      max_steps: breaker.max_steps,
+      steps_used: next_steps,
+      max_consecutive_failures: breaker.max_consecutive_failures,
+      consecutive_failures: next_failures,
+      tripped: false,
+      trip_reason: "",
+    }
+  }
+}
+
+///| Start a fresh Idle session bound to an existing BudgetBreaker and audit history.
+pub fn new_session(
+  contract : ToolContract,
+  breaker : BudgetBreaker
+) -> GuardSession {
+  if breaker.tripped {
+    let halted_log = append_audit(
+      [],
+      Idle,
+      Halted,
+      contract.tool_name,
+      "breaker_already_tripped:" + breaker.trip_reason,
+    )
+    {
+      tool_name: contract.tool_name,
+      requires_approval: contract.requires_approval,
+      state: Halted,
+      violations: [],
+      audit_log: halted_log,
+      breaker,
+    }
+  } else {
+    {
+      tool_name: contract.tool_name,
+      requires_approval: contract.requires_approval,
+      state: Idle,
+      violations: [],
+      audit_log: [],
+      breaker,
+    }
+  }
+}
+
+///| Transition Idle -> Validated (or Rejected/Halted on contract violation).
+pub fn submit_for_validation(
+  session : GuardSession,
+  contract : ToolContract,
+  params : Array[ParamEntry]
+) -> GuardSession {
+  if session.breaker.tripped {
+    let log = append_audit(
+      session.audit_log,
+      session.state,
+      Halted,
+      session.tool_name,
+      "circuit_breaker_open:" + session.breaker.trip_reason,
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+  if session.state != Idle {
+    let log = append_audit(
+      session.audit_log,
+      session.state,
+      Halted,
+      session.tool_name,
+      "illegal_transition_validate_requires_idle",
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+  let found = validate_call(contract, params)
+  if found.length() > 0 {
+    let next_breaker = breaker_record_outcome(session.breaker, false)
+    let next_state = if next_breaker.tripped { Halted } else { Rejected }
+    let reason = if next_breaker.tripped {
+      "contract_violation_halted:" + next_breaker.trip_reason
+    } else {
+      "contract_violation_rejected"
+    }
+    let log = append_audit(
+      session.audit_log,
+      Idle,
+      next_state,
+      session.tool_name,
+      reason,
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: next_state,
+      violations: found,
+      audit_log: log,
+      breaker: next_breaker,
+    }
+  } else {
+    let log = append_audit(
+      session.audit_log,
+      Idle,
+      Validated,
+      session.tool_name,
+      "contract_validated",
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Validated,
+      violations: [],
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+}
+
+///| Transition Validated -> WaitingApproval (or Approved if contract requires_approval is false).
+pub fn gate_approval(session : GuardSession) -> GuardSession {
+  if session.state != Validated {
+    let log = append_audit(
+      session.audit_log,
+      session.state,
+      Halted,
+      session.tool_name,
+      "illegal_transition_gate_requires_validated",
+    )
+    return {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Halted,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+  if session.requires_approval {
+    let log = append_audit(
+      session.audit_log,
+      Validated,
+      WaitingApproval,
+      session.tool_name,
+      "awaiting_human_approval",
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: WaitingApproval,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  } else {
+    let log = append_audit(
+      session.audit_log,
+      Validated,
+      Approved,
+      session.tool_name,
+      "low_risk_auto_approved",
+    )
+    {
+      tool_name: session.tool_name,
+      requires_approval: session.requires_approval,
+      state: Approved,
+      violations: session.violations,
+      audit_log: log,
+      breaker: session.breaker,
+    }
+  }
+}
+
