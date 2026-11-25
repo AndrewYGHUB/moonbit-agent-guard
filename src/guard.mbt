@@ -197,3 +197,63 @@ fn string_in_list(target : String, allowed : Array[String]) -> Bool {
   false
 }
 
+///| Validate tool arguments against a ToolContract and return all violations.
+pub fn validate_call(
+  contract : ToolContract,
+  params : Array[ParamEntry]
+) -> Array[Violation] {
+  let violations : Array[Violation] = []
+  let mut i = 0
+  while i < contract.rules.length() {
+    let rule = contract.rules[i]
+    match find_param(params, rule.name) {
+      None =>
+        if rule.required {
+          violations.push(MissingRequiredField(rule.name))
+        }
+      Some(val) =>
+        match rule.kind {
+          AnyText =>
+            match val {
+              Str(_) => ()
+              IntNum(_) => violations.push(TypeMismatch(rule.name))
+            }
+          IntRange(min_v, max_v) =>
+            match val {
+              IntNum(n) =>
+                if n < min_v || n > max_v {
+                  violations.push(IntOutOfRange(rule.name, n, min_v, max_v))
+                }
+              Str(_) => violations.push(TypeMismatch(rule.name))
+            }
+          EnumAllowlist(allowed) =>
+            match val {
+              Str(s) =>
+                if not(string_in_list(s, allowed)) {
+                  violations.push(InvalidEnumValue(rule.name, s))
+                }
+              IntNum(_) => violations.push(TypeMismatch(rule.name))
+            }
+          SafePath =>
+            match val {
+              Str(p) =>
+                if has_path_traversal(p) {
+                  violations.push(PathTraversalBlocked(rule.name, p))
+                }
+              IntNum(_) => violations.push(TypeMismatch(rule.name))
+            }
+          SafeCommandArg =>
+            match val {
+              Str(arg) =>
+                if has_shell_metachar(arg) {
+                  violations.push(CommandMetacharBlocked(rule.name, arg))
+                }
+              IntNum(_) => violations.push(TypeMismatch(rule.name))
+            }
+        }
+    }
+    i = i + 1
+  }
+  violations
+}
+
